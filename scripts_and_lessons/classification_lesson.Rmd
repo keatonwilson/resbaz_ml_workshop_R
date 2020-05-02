@@ -43,7 +43,7 @@ library(tidymodels)
 library(tidyverse)
 
 #Reading in the data from the github repo
-wine_data = read_csv("https://tinyurl.com/y7dyzpfh")
+wine_data = read_csv("https://tinyurl.com/y82aefsj")
 
 #Overviews
 glimpse(wine_data)
