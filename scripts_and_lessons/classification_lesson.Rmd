@@ -67,7 +67,7 @@ Ok, so this looks good. We have our item we want to classify in column 1, and al
 
 **What do we need to do before we jump into to trying to build some algorithms?**  
 
-Preprocess! In particular, we need to center and scale the data. *caret* can do this for us.  
+Preprocess! In particular, we need to center and scale the data. *tidymodels* can do this for us.  
 
 ### Part 3 - Preprocessing
 
@@ -94,11 +94,9 @@ wine_rec = recipe(varietal ~ ., data = wine_train) %>%
 
 # Part 4 - Model Specification, Testing and Tuning
 
-There are a ton of classification models to choose from - when starting ML stuff, this can be a really daunting part of the thing.  Today, we're going to explore a couple of bread-and-butter models:  
-1. k-nn - nearest neighbord classifier  
-2. Naive Bayes  
-3. Decision Trees  
-4. Support Vector Machines  
+There are a ton of classification models to choose from - when starting ML 
+stuff, this can be a really daunting part of the thing.  Today, we're going to 
+explore one type of model: Support Vector Machines  
 
 I'm not going to go into the math of how all of these operate at all. It's the beyond the scope of this workshop, but here is a good overview: https://medium.com/@sifium/machine-learning-types-of-classification-9497bd4f2e14  
 
@@ -110,36 +108,86 @@ We're going to use the second type.
 
 ```{r, warning=FALSE, message=FALSE}
 # setting up the model
-rf_mod = rand_forest(trees = 1000) %>% 
-  set_engine("ranger") %>% 
-  set_mode("classification")
+svm_mod = parsnip::svm_rbf(cost = tune(), 
+                           rbf_sigma = tune(), 
+                           margin = tune()) %>%
+  set_mode("classification") %>%
+  set_engine("kernlab")
 
+#inspect 
+svm_mod
+```
+
+
+```{r}
+# Setting up folds
+folds = vfold_cv(wine_train, strata = 'varietal')
+folds
+#setting up tuning
+svm_tune_grid = grid_regular(dials::cost(),
+                       dials::rbf_sigma(), 
+                       dials::svm_margin())
+svm_tune_grid
+```
+
+```{r}
 # let's build a workflow that pairs the model with the preprocessing
 wine_wflow = workflow() %>% 
-  add_model(rf_mod) %>% 
-  add_recipe(wine_rec)
-
+  add_recipe(wine_rec) %>%
+  add_model(svm_mod)
+  
 # Can inspect
 wine_wflow
+```
 
-# Let's fit the model and simultanesouly run preprocessing
-wine_fit = wine_wflow %>%
-  fit(data = wine_train)
+```{r}
+# Let's fit the model and simultanesouly run preprocessing - this can take a 
+# while
+wine_svm_fit_results = wine_wflow %>%
+  tune_grid(resamples = folds, 
+            grid = svm_tune_grid, 
+            metrics = metric_set(roc_auc, accuracy))
 
-# Done! Let's yank out some information about the model
-wine_fit %>%
-  pull_workflow_fit()
+#inspect
+wine_svm_fit_results
 
-# let's run it on the test data and see how accurate it is
-wine_pred = predict(wine_fit, wine_test, type = c("prob")) %>% 
-  bind_cols(wine_test) 
+```
 
-wine_pred %>%
-  roc_curve(truth = varietal, .pred_1:.pred_3) %>%
-  autoplot()
+```{r}
+# all metrics
+collect_metrics(wine_svm_fit_results)
+# the top 5 based on roc scores
+show_best(wine_knn_fit_cv, metric = "roc_auc")
+```
 
-wine_pred %>%
-  roc_auc(truth = varietal, .pred_1:.pred_3)
+```{r}
+
+wine_svm_best = wine_svm_fit_results %>%
+  select_best(metric = "roc_auc") 
+
+# add to workflow
+wine_wflow = wine_wflow %>%
+  finalize_workflow(wine_svm_best)
+
+```
+
+```{r}
+# Evaluating on test data
+svm_fit = wine_wflow %>%
+  last_fit(data_split)
+
+test_performance = svm_fit %>% collect_metrics()
+test_performance
+
+svm_roc = svm_fit$.predictions[[1]] %>%
+  roc_curve(truth = varietal, .pred_1:.pred_3)
+
+autoplot(svm_roc)
+
+# confusion matrix
+test_predictions = collect_predictions(svm_fit)
+test_predictions %>% 
+  conf_mat(truth = varietal, estimate = .pred_class)
 ```
 
 
