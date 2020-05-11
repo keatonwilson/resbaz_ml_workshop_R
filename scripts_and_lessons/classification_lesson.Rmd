@@ -5,7 +5,8 @@ date: "5/22/2019"
 output:
   pdf_document: default
   word_document: default
-  html_document: default
+  html_document:
+    theme: lumen
 ---
 
 ```{r setup, include=FALSE}
@@ -14,7 +15,6 @@ library(rmarkdown)
 ```
 
 # Introduction to Machine Learning in R with caret  
-***  
 
 ## Part 1 - What is machine learning? What are the tenets, what is the basic workflow?  
 
@@ -28,6 +28,7 @@ library(rmarkdown)
 3. Splitting the data to prevent overfitting  
 
 
+## Part 2 - Getting your hands dirty:  
 ### Classifcation Problem - Wine varietal identifier  
 
 Here is the scenario: we've been contacted by a famous vignter in Italy because she suspects that one of the prized varietals (a rare version of *Aglianicone* that her family has grown for 7 generations) from her vinyard has been stolen, and is being grown and sold to make competitively delicious wine in the United States. The competing winemaker claims that the varietal being grown in the US is from a closely related varietal from the same region, that he obtained legally.  
@@ -35,7 +36,7 @@ Here is the scenario: we've been contacted by a famous vignter in Italy because 
 Our customer has hired us to develop an algorithm to determine the likelihood that this is the wine being sold by the competitor was made from the varietal grown on her farm. Unfortunately, we don't have fancy genomic data to work with, but she has provided us with chemical profiles of a bunch of different wines made from both her grapes and two varietals that the competitor claims to be working with. The owner of the competing US vinyard has graciously provided us with the same type of data from a bunch of his wines to make comparisons on - he's looking to clear his name (and probably doesn't also believe that an algorithm can predict whether or not a given wine comes from a certain regional varietal)   
 
 
-### Part 2 - Examining the Data
+### Examining the Data
 
 ```{r, message=FALSE, warning=FALSE}
 # Getting libraries we need loaded
@@ -63,13 +64,22 @@ sum(is.na(wine_data))
 
 #or we can deal with it in pre-processing.
 ```
-Ok, so this looks good. We have our item we want to classify in column 1, and all of our features in the rest. For our varietal numbers, 1 and 2 are the local varietals not owned by our customer, but varietal 3 is her special grape. So we're looking for the presence of any wines made from varietal 3 in the test set. 
+Ok, so this looks good. We have our item we want to classify in column 1, and 
+all of our features in the rest. 
 
-**What do we need to do before we jump into to trying to build some algorithms?**  
+### The tidymodels workflow  
+Here is the basic workflow for building ML models with tidymodels:  
+1. Split data into training and testing data  
+2. Make a recipe for preprocessing the data  
+3. Specify our model (and what hyperparameters we want to tune)  
+4. Set up our resampling scheme to tune  
+5. Fit models  
+6. Choose best model and evluate on test data  
 
-Preprocess! In particular, we need to center and scale the data. *tidymodels* can do this for us.  
+We'll talk about the steps above that need a bit of explanation as we go through
+things. 
 
-### Part 3 - Preprocessing
+### Training and testing split and preprocessing
 
 ``` {r}
 #Setting up the preprocessing algorithm
@@ -89,28 +99,46 @@ wine_rec = recipe(varietal ~ ., data = wine_train) %>%
   step_knnimpute(all_predictors()) %>%
   step_scale(all_predictors()) %>%
   step_nzv(all_predictors())
+
+wine_prepped = prep(wine_rec, training = wine_train)
+training_example = bake(wine_prepped, new_data = wine_train)
+training_example
+
 ```
 
+So this is how you would view the data, and you could build things stepwise
+like this, but we're going to include it into a larger workflow.
 
-# Part 4 - Model Specification, Testing and Tuning
+# Model Specification, Testing and Tuning
 
 There are a ton of classification models to choose from - when starting ML 
 stuff, this can be a really daunting part of the thing.  Today, we're going to 
 explore one type of model: Support Vector Machines  
 
-I'm not going to go into the math of how all of these operate at all. It's the beyond the scope of this workshop, but here is a good overview: https://medium.com/@sifium/machine-learning-types-of-classification-9497bd4f2e14  
+I'm not going to go into the math of how classification algorithms operate at 
+all. It's the beyond the scope of this workshop, but here is a good overview: https://medium.com/@sifium/machine-learning-types-of-classification-9497bd4f2e14  
 
-One thing that we need to talk about briefly is resampling - this is the method we're going to use to assess how 'good' a model is, without applying it to the test data. There are a couple of main ways to do this:  
-1. bootstrapping - random sampling within the dataset with replacement. Pulling a bunch of subsets of the data and looking at how the model performs across these subsets.  
-2. Repeated n-fold cross-validation - does a bunch of splitting into training and test data **within** the training set, and then averages accuracy or RMSE across all these little mini-sets. 
+A simple explanation (really awesome) of how SVM works: 
+[https://www.youtube.com/watch?v=efR1C6CvhmE](https://www.youtube.com/watch?v=efR1C6CvhmE)
+
+One thing that we need to talk about briefly is resampling - this is the method 
+we're going to use to assess how 'good' a model is, without applying it to the 
+test data. There are a couple of main ways to do this:  
+1. bootstrapping - random sampling within the dataset with replacement. Pulling 
+a bunch of subsets of the data and looking at how the model performs across 
+these subsets.  
+2. Repeated n-fold cross-validation - does a bunch of splitting into training 
+and test data **within** the training set, and then averages accuracy or RMSE 
+across all these little mini-sets. 
 
 We're going to use the second type.  
 
+Let's setup our model first. 
 ```{r, warning=FALSE, message=FALSE}
 # setting up the model
-svm_mod = parsnip::svm_rbf(cost = tune(), 
-                           rbf_sigma = tune(), 
-                           margin = tune()) %>%
+svm_mod = parsnip::svm_poly(cost = tune(), 
+                           degree = tune(), 
+                           scale_factor = tune()) %>%
   set_mode("classification") %>%
   set_engine("kernlab")
 
@@ -118,17 +146,19 @@ svm_mod = parsnip::svm_rbf(cost = tune(),
 svm_mod
 ```
 
+And now we'll setup our cross-validation scheme and tuning grid. 
 
 ```{r}
 # Setting up folds
-folds = vfold_cv(wine_train, strata = 'varietal')
+folds = vfold_cv(wine_train, strata = 'varietal', v = 10)
 folds
 #setting up tuning
 svm_tune_grid = grid_regular(dials::cost(),
-                       dials::rbf_sigma(), 
-                       dials::svm_margin())
+                       dials::degree(), 
+                       dials::scale_factor())
 svm_tune_grid
 ```
+Now we can put everything together into a workflow. 
 
 ```{r}
 # let's build a workflow that pairs the model with the preprocessing
@@ -140,7 +170,7 @@ wine_wflow = workflow() %>%
 wine_wflow
 ```
 
-```{r}
+```{r, cache=TRUE}
 # Let's fit the model and simultanesouly run preprocessing - this can take a 
 # while
 wine_svm_fit_results = wine_wflow %>%
@@ -150,53 +180,95 @@ wine_svm_fit_results = wine_wflow %>%
 
 #inspect
 wine_svm_fit_results
+wine_svm_fit_results$.metrics[[1]]
 
 ```
+
+So we can see how many models are actually being built here - for each fold, 
+where there are 10 folds here, we are building a model for each hyperparameter
+set in our grid, which is 27 combinations. So in total, we built and assessed 
+270 models, and we're taking the average (of 10) accuracy of each 27 parameter 
+combinations as our metric of how good a model is.  
+
+Now, let's collect our metrics and figure out what set of hyperparameters 
+generated the best model.  
 
 ```{r}
 # all metrics
 collect_metrics(wine_svm_fit_results)
 # the top 5 based on roc scores
-show_best(wine_knn_fit_cv, metric = "roc_auc")
+show_best(wine_svm_fit_results, metric = "roc_auc")
 ```
 
 ```{r}
-
+# pull out parameters of the 'best' model
 wine_svm_best = wine_svm_fit_results %>%
   select_best(metric = "roc_auc") 
 
-# add to workflow
+# add this step to the workflow
 wine_wflow = wine_wflow %>%
   finalize_workflow(wine_svm_best)
 
 ```
 
+Great! So we have our model finalized, and incorporated into our workflow, now 
+we want to see how good the model does on out-of-sample data - or the data we
+saved as testing data very early in the process! This will give us a final, 
+conservative estimate as to how our model does on new data!  
+
 ```{r}
 # Evaluating on test data
+# Last fit adds a step at the end of the workflow that builds on the training
+# data and then evaluates on the test data we generated from our split  
+
 svm_fit = wine_wflow %>%
   last_fit(data_split)
 
 test_performance = svm_fit %>% collect_metrics()
 test_performance
 
-svm_roc = svm_fit$.predictions[[1]] %>%
-  roc_curve(truth = varietal, .pred_1:.pred_3)
-
-autoplot(svm_roc)
+# overall, not too bad. We got ~ 80% accruacy overall, and our roc_auc score 
+# was 0.87. 
 
 # confusion matrix
 test_predictions = collect_predictions(svm_fit)
 test_predictions %>% 
   conf_mat(truth = varietal, estimate = .pred_class)
+
+# let's plot the roc curve
+svm_roc = svm_fit$.predictions[[1]] %>%
+  roc_curve(truth = varietal, .pred_1:.pred_3)
+
+autoplot(svm_roc)
 ```
 
+ROC curves are a pretty standard way of showing how good your model is when 
+classifying things. A nice explanation is here [https://www.youtube.com/watch?v=4jRBRDbJemM](https://www.youtube.com/watch?v=4jRBRDbJemM).  
 
-  
-### Part 6 - Continuing Practice  
+Without a lot of explanation: the y-axis shows the true positive rate,
+(sensitivity) and the x-axis shows the false positive rate (1-specificity).  
+
+Each point is the result of a confusion matrix generated at different 
+thresholds (cutoffs that determine what probability you'll need to identify a 
+sample as one varietal or another). 
+
+### Summary  
+So that was a lot of work! But we're left with a pretty decent model - one that 
+predicts the correct varietal of wine about 80% of the time. Improving this 
+score is a big chunk of doing ML in the real-world. Are there different 
+features we could create that would help? Should we expand our tuning grid more 
+widely to see if there are a set of parameters that are better suited? We've 
+only tested one type of model in a galaxy of options... perhaps comparing a few
+models to this one would be good!
+
+Lots of options!
+
+### Continuing Practice  
 
 Some resources if you want to get better at this:  
-1. Kaggle - an online community of data scientists - lots of cool datasets to play with, and competitions!  
-2. https://kbroman.org/pkg_primer/pages/resources.html - great list of resources!  
-3. Machine Learning with R - Brett Lantz. Great book!  
-4. [Great article on different algorithm types](https://medium.freecodecamp.org/when-to-use-different-machine-learning-algorithms-a-simple-guide-ba615b19fb3b)  
+1. [Tidymodels learning](https://www.tidymodels.org)
+2. Kaggle - an online community of data scientists - lots of cool datasets to play with, and competitions!  
+3. https://kbroman.org/pkg_primer/pages/resources.html - great list of resources!  
+4. Machine Learning with R - Brett Lantz. Great book!  
+5. [Great article on different algorithm types](https://medium.freecodecamp.org/when-to-use-different-machine-learning-algorithms-a-simple-guide-ba615b19fb3b)  
 
