@@ -56,6 +56,7 @@ wine_data = wine_data %>%
 
 #Checking for NAs
 sum(is.na(wine_data))
+wine_data %>% filter_all(any_vars(is.na(.)))
 
 #Uh oh - conversation about missing data. 
 
@@ -97,9 +98,14 @@ wine_test = testing(data_split)
 #Let's start to build a recipe  
 wine_rec = recipe(varietal ~ ., data = wine_train) %>%
   step_knnimpute(all_predictors()) %>%
+  step_center(all_predictors()) %>%
   step_scale(all_predictors()) %>%
   step_nzv(all_predictors())
 
+# step_center normalizes the data to have a mean of 0, step_scale 
+# standardizes to have a standard deviation of 1. 
+
+# Prep sets up the preprocessing and bake actually does it
 wine_prepped = prep(wine_rec, training = wine_train)
 training_example = bake(wine_prepped, new_data = wine_train)
 training_example
@@ -142,6 +148,8 @@ svm_mod = parsnip::svm_poly(cost = tune(),
   set_mode("classification") %>%
   set_engine("kernlab")
 
+# you may get an error saying you need to install another package - go ahead 
+# and do that now
 #inspect 
 svm_mod
 ```
@@ -150,7 +158,7 @@ And now we'll setup our cross-validation scheme and tuning grid.
 
 ```{r}
 # Setting up folds
-folds = vfold_cv(wine_train, strata = 'varietal', v = 10)
+folds = vfold_cv(wine_train, strata = 'varietal', v = 5, repeats = 5)
 folds
 #setting up tuning
 svm_tune_grid = grid_regular(dials::cost(),
@@ -182,13 +190,16 @@ wine_svm_fit_results = wine_wflow %>%
 wine_svm_fit_results
 wine_svm_fit_results$.metrics[[1]]
 
+# why is this 54? Because we have two accuracy measurements - accuracy and roc_auc
+
 ```
 
-So we can see how many models are actually being built here - for each fold, 
-where there are 10 folds here, we are building a model for each hyperparameter
-set in our grid, which is 27 combinations. So in total, we built and assessed 
-270 models, and we're taking the average (of 10) accuracy of each 27 parameter 
-combinations as our metric of how good a model is.  
+So we can see how many models are actually being built here - for each 
+fold-repeat combination, where there are 5 folds here and 5 repeats, we are 
+building a model for each hyperparameter set in our grid, which is 27 
+combinations. So in total, we built and assessed 27x5x5=675 models, and we're 
+taking the average accuracy of each 27 parameter combinations across 
+fold-repeat combinations as our metric of how good a model is.  
 
 Now, let's collect our metrics and figure out what set of hyperparameters 
 generated the best model.  
@@ -209,6 +220,11 @@ wine_svm_best = wine_svm_fit_results %>%
 wine_wflow = wine_wflow %>%
   finalize_workflow(wine_svm_best)
 
+# What this last step does is tell the workflow to grab the hyperparameter 
+# values from the select_best() we fed in earlier and apply those values to the
+# model that we're going to build in our next step. 
+# 
+# 
 ```
 
 Great! So we have our model finalized, and incorporated into our workflow, now 
@@ -227,7 +243,7 @@ svm_fit = wine_wflow %>%
 test_performance = svm_fit %>% collect_metrics()
 test_performance
 
-# overall, not too bad. We got ~ 80% accruacy overall, and our roc_auc score 
+# overall, not great, but not terrible We got ~ 44% accruacy overall, and our roc_auc score 
 # was 0.87. 
 
 # confusion matrix
